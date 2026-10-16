@@ -33,7 +33,7 @@ input,select,textarea{font:inherit;border:1px solid #e1d0c3;border-radius:10px;p
 .tools input{flex:1;min-width:180px}
 .tools select{width:auto;max-width:100%}
 .products{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
-.card{background:white;border-radius:16px;overflow:hidden;box-shadow:0 4px 16px #5b35200d;border:1px solid #f0e5dc;cursor:pointer}
+.card{background:white;border-radius:16px;overflow:hidden;box-shadow:0 4px 16px #5b35200d;border:1px solid #f0e5dc}
 .card img{width:100%;height:170px;object-fit:cover;background:#f6e9df}
 .card-body{padding:14px}
 .card h3{margin:0 0 8px;font-size:17px}
@@ -54,6 +54,8 @@ footer{background:var(--brown);color:white;text-align:center;padding:22px;font-s
 .field{margin:12px 0}
 .field label{display:block;font-size:13px;font-weight:bold;margin-bottom:6px}
 .close{float:right;background:#eee;border:0;border-radius:50%;padding:8px 11px;cursor:pointer}
+.rating{display:inline-flex;gap:4px;align-items:center}
+.star{color:#ffb400;font-size:14px}
 @media(max-width:650px){
  .hero{grid-template-columns:1fr;padding-top:35px}
  .hero img{height:200px}
@@ -62,6 +64,7 @@ footer{background:var(--brown);color:white;text-align:center;padding:22px;font-s
  .card-body{padding:10px}
  .card h3{font-size:15px}
  .section{padding:28px 4%}
+ .dialog{max-width:92vw}
 }
 @media(max-width:360px){.products{grid-template-columns:1fr}}
 </style>
@@ -122,6 +125,8 @@ footer{background:var(--brown);color:white;text-align:center;padding:22px;font-s
 let products = [];
 let categories = [];
 let cart = {};
+let reviewsEnabled = true; // will be set false if reviews table not present or query fails
+let reviewsMap = {}; // productId => [reviews]
 
 try {
   const saved = localStorage.getItem('zura_cart');
@@ -148,6 +153,17 @@ function normalizeProduct(row) {
     category: row.category || row.category_name || row.category_id || '',
     stock: row.stock != null ? Number(row.stock) : (row.quantity != null ? Number(row.quantity) : null)
   };
+}
+
+function normalizeReview(row){
+  if(!row) return null;
+  const rating = row.rating ?? row.stars ?? row.rate ?? row.score ?? null;
+  const product_id = row.product_id ?? row.productId ?? row.product ?? null;
+  const content = row.content ?? row.text ?? row.review ?? '';
+  const user_name = row.user_name ?? row.customer_name ?? row.author ?? row.name ?? null;
+  const created_at = row.created_at ?? row.created ?? null;
+  const is_public = (row.public === undefined) ? true : Boolean(row.public);
+  return { id: row.id ?? null, product_id, rating: rating!=null?Number(rating):null, content, user_name, created_at, public: is_public };
 }
 
 function escapeHtml(value) {
@@ -204,11 +220,59 @@ async function loadProducts() {
     if (error) throw error;
 
     products = (data || []).map(normalizeProduct).filter(Boolean);
+    // try load reviews for these products
+    const ids = products.map(p=>p.id).filter(Boolean);
+    if(ids.length) await loadReviewsForProducts(ids);
     renderProducts();
   } catch (err) {
     console.error('Gagal memuat produk:', err);
     container.innerHTML = '<div class="empty">Gagal memuat produk. Silakan coba lagi nanti.</div>';
   }
+}
+
+async function loadReviewsForProducts(ids){
+  reviewsMap = {};
+  try{
+    const { data, error } = await supabaseClient
+      .from('reviews')
+      .select('*')
+      .in('product_id', ids)
+      .limit(1000);
+    if(error){
+      // if table not found or access denied, disable reviews
+      console.warn('Tidak dapat memuat reviews:', error.message || error);
+      reviewsEnabled = false;
+      return;
+    }
+    const rows = data || [];
+    rows.forEach(r=>{
+      const rev = normalizeReview(r);
+      if(!rev || !rev.product_id) return;
+      if(rev.public === false) return; // skip hidden
+      const pid = String(rev.product_id);
+      reviewsMap[pid] = reviewsMap[pid] || [];
+      reviewsMap[pid].push(rev);
+    });
+    // sort reviews for each product by created_at desc
+    Object.keys(reviewsMap).forEach(pid=>{
+      reviewsMap[pid].sort((a,b)=>{
+        if(a.created_at && b.created_at) return new Date(b.created_at) - new Date(a.created_at);
+        return 0;
+      });
+    });
+  }catch(e){
+    console.error('Kesalahan saat memuat reviews', e);
+    reviewsEnabled = false;
+  }
+}
+
+function getReviewStats(productId){
+  const pid = String(productId);
+  const list = reviewsMap[pid] || [];
+  const visible = list.filter(r=>r.public !== false && r.rating!=null);
+  const count = visible.length;
+  const avg = count? (visible.reduce((s,r)=>s+(Number(r.rating)||0),0)/count) : 0;
+  return { count, avg };
 }
 
 function renderProducts() {
@@ -227,7 +291,17 @@ function renderProducts() {
     return;
   }
 
-  container.innerHTML = list.map((p) => `
+  container.innerHTML = list.map((p) => {
+    const stats = reviewsEnabled ? getReviewStats(p.id) : null;
+    let reviewHtml = '';
+    if(reviewsEnabled){
+      if(stats.count===0) reviewHtml = '<div class="small">Belum ada ulasan</div>';
+      else {
+        const fullStars = Math.round(stats.avg);
+        reviewHtml = `<div class="rating">${'<span class="star">★</span>'.repeat(fullStars)} <span class="small">(${stats.count})</span></div>`;
+      }
+    }
+    return `
     <article class="card" onclick="openProduct(${JSON.stringify(p.id)})">
       <img src="${p.image || 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=600&q=80'}" alt="${escapeHtml(p.name)}" loading="lazy">
       <div class="card-body">
@@ -235,10 +309,11 @@ function renderProducts() {
         <h3>${escapeHtml(p.name)}</h3>
         <div class="desc">${escapeHtml(p.desc || 'Deskripsi tidak tersedia.')}</div>
         <div class="price">${rupiah(p.price)}</div>
+        ${reviewHtml}
         <button class="btn" onclick="event.stopPropagation(); addToCart(${JSON.stringify(p.id)})">+ Tambah</button>
       </div>
     </article>
-  `).join('');
+  `}).join('');
 }
 
 function addToCart(id) {
@@ -308,22 +383,28 @@ function closeDetail() {
   document.querySelectorAll('.modal.open').forEach((el) => el.remove());
 }
 
+function renderReviewsList(productId){
+  const pid = String(productId);
+  const list = reviewsMap[pid] || [];
+  if(!list.length) return '<div class="small">Belum ada ulasan untuk produk ini.</div>';
+  return list.map(r => `
+    <div style="border-bottom:1px solid #eee;padding:8px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>${escapeHtml(r.user_name || 'Anonim')}</strong></div>
+        <div class="rating">${'<span class="star">★</span>'.repeat(Math.max(0,Math.round(r.rating||0)))}</div>
+      </div>
+      <div class="small" style="color:#666">${r.created_at?escapeHtml(new Date(r.created_at).toLocaleString()):''}</div>
+      <div style="margin-top:6px">${escapeHtml(r.content)}</div>
+    </div>
+  `).join('');
+}
+
 function openProduct(id) {
   const prod = products.find((p) => String(p.id) === String(id));
   if (!prod) return alert('Produk tidak ditemukan.');
 
-  const overlay = document.createElement('div');
-  overlay.className = 'modal open';
-  overlay.style.zIndex = '30';
-  overlay.onclick = (event) => {
-    if (event.target === overlay) overlay.remove();
-  };
-
-  const dialog = document.createElement('div');
-  dialog.className = 'dialog';
-  dialog.innerHTML = `
-    <button class="close" onclick="closeDetail()">✕</button>
-    <h2>Detail Produk</h2>
+  const stats = reviewsEnabled ? getReviewStats(prod.id) : null;
+  const detailHtml = `
     <div style="display:flex;flex-direction:column;gap:10px;">
       <img src="${prod.image || 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80'}" alt="${escapeHtml(prod.name)}" style="width:100%;height:220px;object-fit:cover;border-radius:12px;">
       <div>
@@ -332,6 +413,7 @@ function openProduct(id) {
       </div>
       <div>${escapeHtml(prod.desc || 'Deskripsi tidak tersedia.')}</div>
       <div class="price">${rupiah(prod.price)}</div>
+      ${reviewsEnabled ? (stats.count?`<div class="small">Rating rata-rata: ${stats.avg.toFixed(1)} (${stats.count} ulasan)</div>`:`<div class="small">Belum ada ulasan</div>`) : '<div class="small">Fitur ulasan belum diaktifkan.</div>'}
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <label style="font-weight:bold">Jumlah</label>
         <button type="button" class="btn" onclick="const input=document.getElementById('detail_qty'); input.value = Math.max(1, Number(input.value || 1) - 1);">−</button>
@@ -339,11 +421,73 @@ function openProduct(id) {
         <button type="button" class="btn" onclick="const input=document.getElementById('detail_qty'); input.value = Number(input.value || 1) + 1;">+</button>
       </div>
       <button class="btn" style="width:100%" onclick="const q = Number(document.getElementById('detail_qty').value || 1); addToCartWithQty(${JSON.stringify(prod.id)}, q); closeDetail();">Tambah ke Keranjang</button>
+
+      <hr>
+      <h3>Ulasan Pelanggan</h3>
+      <div id="reviews_list">${ renderReviewsList(prod.id) }</div>
+
+      <h4>Tulis Ulasan</h4>
+      ${ reviewsEnabled ? `
+        <div class="field"><label>Nama (opsional)</label><input id="rev_name" placeholder="Nama Anda"></div>
+        <div class="field"><label>Rating</label>
+          <div id="star_input" style="display:flex;gap:6px;align-items:center">
+            ${[1,2,3,4,5].map(n=>`<button type="button" class="btn" onclick="document.getElementById('rev_rating').value=${n}; highlightStars(this,${n})">${n} ★</button>`).join('')}
+            <input id="rev_rating" type="hidden" value="5">
+          </div>
+        </div>
+        <div class="field"><label>Ulasan</label><textarea id="rev_text" rows="3" placeholder="Ceritakan pengalaman Anda..."></textarea></div>
+        <button class="btn" onclick="submitReview(${JSON.stringify(prod.id)})">Kirim Ulasan</button>
+      ` : `<div class="small">Fitur ulasan belum tersedia untuk toko ini.</div>` }
     </div>
   `;
 
+  const overlay = document.createElement('div');
+  overlay.className = 'modal open';
+  overlay.style.zIndex = '30';
+  overlay.onclick = (event) => { if (event.target === overlay) overlay.remove(); };
+
+  const dialog = document.createElement('div');
+  dialog.className = 'dialog';
+  dialog.innerHTML = `<button class="close" onclick="closeDetail()">✕</button><h2>Detail Produk</h2>` + detailHtml;
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
+}
+
+function highlightStars(btn, n){
+  // visual feedback not fully necessary; simple approach: no-op (buttons show numbers)
+}
+
+async function submitReview(productId){
+  if(!reviewsEnabled){ alert('Fitur ulasan tidak tersedia.'); return; }
+  const rating = Number(document.getElementById('rev_rating').value || 0);
+  const name = document.getElementById('rev_name').value.trim();
+  const text = document.getElementById('rev_text').value.trim();
+  if(!rating || rating<1 || rating>5){ alert('Pilih rating antara 1 sampai 5.'); return; }
+  if(!text || text.length < 3){ alert('Tulis ulasan minimal 3 karakter.'); return; }
+
+  const payload = { product_id: productId, rating, content: text };
+  if(name) payload.user_name = name;
+  // try to set public flag if table has it (extra columns are ignored by Supabase if they don't exist)
+  payload.public = true;
+
+  try{
+    const { data, error } = await supabaseClient.from('reviews').insert([payload]).select();
+    if(error) throw error;
+    const newRow = (data && data[0]) ? normalizeReview(data[0]) : normalizeReview(payload);
+    // add to local map and re-render
+    const pid = String(productId);
+    reviewsMap[pid] = reviewsMap[pid] || [];
+    reviewsMap[pid].unshift(newRow);
+    // update UI: find reviews_list and append
+    const reviewsList = document.getElementById('reviews_list');
+    if(reviewsList){ reviewsList.innerHTML = renderReviewsList(productId); }
+    // update product cards
+    renderProducts();
+    alert('Terima kasih! Ulasan Anda telah diterima.');
+  }catch(err){
+    console.error('Gagal mengirim ulasan', err);
+    alert('Gagal mengirim ulasan. Pastikan fitur ulasan diaktifkan dan coba lagi.');
+  }
 }
 
 function checkout() {
