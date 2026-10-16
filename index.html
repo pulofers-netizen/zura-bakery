@@ -182,5 +182,19 @@ function checkout(){
 document.getElementById("year").textContent=new Date().getFullYear();
 renderProducts();updateCart();
 </script>
+  <!-- Koneksi Supabase Zura Bakery -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<script>
+  const SUPABASE_URL = "https://raxzzqrscrgzukvmhtrh.supabase.co";
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_7fT73VRegIJ-d5IN45VncA_LjrVt0Eq";
+
+  const supabaseClient = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY
+  );
+
+  console.log("Koneksi Supabase siap digunakan.");
+</script>
 </body>
 </html>
