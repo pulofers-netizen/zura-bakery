@@ -195,6 +195,25 @@ renderProducts();updateCart();
   );
 
   console.log("Koneksi Supabase siap digunakan.");
+  console.log("Koneksi Supabase siap digunakan.");
+
+async function testSupabase() {
+  const { data, error } = await supabaseClient
+    .from("categories")
+    .select("*")
+    .limit(5);
+
+  if (error) {
+    console.error("Tes Supabase gagal:", error.message);
+  } else {
+    console.log("Tes Supabase berhasil:", data);
+  }
+}
+
+testSupabase();
+</script>
+</body>
+</html>
 </script>
 </body>
 </html>
