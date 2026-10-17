@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admin Zura Bakery</title>
+  <style>
+    :root{--brown:#6b3527;--cream:#fff8ef;--muted:#806e63}
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--cream);color:var(--brown);padding:12px}
+    header{display:flex;align-items:center;justify-content:space-between}
+    h1{font-family:Georgia,serif;margin:8px 0;font-size:20px}
+    .card{background:white;border-radius:12px;padding:12px;margin:10px 0;box-shadow:0 2px 8px rgba(0,0,0,0.05)}
+    button{background:var(--brown);color:white;border:0;padding:8px 12px;border-radius:8px}
+    .muted{color:var(--muted);font-size:13px}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .col{flex:1;min-width:160px}
+    input[type="email"]{width:100%;padding:8px;border-radius:8px;border:1px solid #e6d8d0}
+    .list{max-height:320px;overflow:auto}
+    .list-item{padding:8px;border-bottom:1px solid #f0e5dc;display:flex;justify-content:space-between;align-items:center}
+    .small{font-size:13px;color:var(--muted)}
+    .disabled{opacity:0.5}
+    @media(min-width:720px){body{padding:20px}h1{font-size:24px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Zura Bakery — Admin (Mobile)</h1>
+      <div class="small">Halaman admin terpisah, hanya baca sampai Anda mengonfirmasi RLS &amp; admin setup.</div>
+    </div>
+    <div id="authArea"></div>
+  </header>
+
+  <div class="card">
+    <strong>Petunjuk penting</strong>
+    <p class="small">Halaman ini hanya akan membaca data dari Supabase secara aman menggunakan publishable (anon) key. Fungsi tulis (tambah/edit/hapus/upload gambar) dinonaktifkan sampai Anda menyiapkan RLS dan menandai akun Anda sebagai admin di Supabase. Ikuti checklist yang akan muncul setelah login.</p>
+  </div>
+
+  <div id="summary" class="card">
+    <div class="row">
+      <div class="col"><strong id="cProducts">—</strong><div class="small">Produk</div></div>
+      <div class="col"><strong id="cCategories">—</strong><div class="small">Kategori</div></div>
+      <div class="col"><strong id="cOrders">—</strong><div class="small">Pesanan</div></div>
+      <div class="col"><strong id="cReviews">—</strong><div class="small">Ulasan</div></div>
+    </div>
+  </div>
+
+  <div id="controls" class="card">
+    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+      <div class="small">Mode: <span id="modeLabel">Read-only</span></div>
+      <div>
+        <button id="refreshBtn">Refresh</button>
+      </div>
+    </div>
+    <div class="small" style="margin-top:8px">Catatan: CRUD &amp; Upload akan tetap nonaktif sampai RLS &amp; admin setup dikonfirmasi.</div>
+  </div>
+
+  <div id="content">
+    <div id="productsCard" class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong>Produk</strong>
+        <div class="small">Tampilan &amp; pencarian; aksi edit/hapus dinonaktifkan</div>
+      </div>
+      <div style="margin-top:8px"><input id="prodSearch" placeholder="Cari produk..." oninput="renderProductList()"></div>
+      <div class="list" id="productList" style="margin-top:8px"></div>
+    </div>
+
+    <div id="categoriesCard" class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong>Kategori</strong>
+        <div class="small">CRUD dinonaktifkan</div>
+      </div>
+      <div class="list" id="categoryList" style="margin-top:8px"></div>
+    </div>
+
+    <div id="ordersCard" class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong>Pesanan</strong>
+        <div class="small">Lihat &amp; ubah status (ubah status dinonaktifkan)</div>
+      </div>
+      <div class="list" id="orderList" style="margin-top:8px"></div>
+    </div>
+
+    <div id="reviewsCard" class="card" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong>Ulasan</strong>
+        <div class="small">Jika tabel reviews tersedia: moderasi (dinonaktifkan)</div>
+      </div>
+      <div class="list" id="reviewList" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // Use same public URL & publishable key as public site (no service role keys here)
+    const SUPABASE_URL = 'https://raxzzqrscrgzukvmhtrh.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_7fT73VRegIJ-d5IN45VncA_LjrVt0Eq';
+    const supabase = supabasejs.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let products = [];
+    let categories = [];
+    let orders = [];
+    let reviewsAvailable = false;
+    let isAdmin = false; // verified from DB (profiles/admins)
+
+    // Auth UI
+    const authArea = document.getElementById('authArea');
+    function renderAuth() {
+      const session = supabase.auth.getSession().then(r=>r.data.session).catch(()=>null);
+      session.then(s=>{
+        authArea.innerHTML = '';
+        if(!s){
+          const emailInput = document.createElement('input');
+          emailInput.type = 'email';
+          emailInput.placeholder = 'Email admin untuk magic link';
+          emailInput.style.padding='6px'; emailInput.style.borderRadius='8px';
+          emailInput.style.border='1px solid #eee';
+          emailInput.style.marginRight='6px';
+          const loginBtn = document.createElement('button');
+          loginBtn.textContent='Sign in (magic link)';
+          loginBtn.onclick = async ()=>{
+            const email = emailInput.value.trim();
+            if(!email) return alert('Masukkan email Anda.');
+            try{
+              const { error } = await supabase.auth.signInWithOtp({ email });
+              if(error) throw error;
+              alert('Magic link dikirim. Buka email Anda di HP untuk menyelesaikan login.');
+            }catch(e){
+              console.error(e); alert('Gagal mengirim magic link: '+(e.message||e));
+            }
+          };
+          authArea.appendChild(emailInput);
+          authArea.appendChild(loginBtn);
+        } else {
+          const span = document.createElement('div');
+          span.innerHTML = `<div class="small">Signed in as <strong>${escapeHtml(s.user.email || s.user.id)}</strong></div>`;
+          const outBtn = document.createElement('button'); outBtn.textContent='Sign out'; outBtn.onclick=async()=>{ await supabase.auth.signOut(); location.reload(); };
+          authArea.appendChild(span); authArea.appendChild(outBtn);
+        }
+      });
+    }
+
+    // Utility
+    function escapeHtml(value){ if(!value) return ''; return String(value).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    async function checkAdminStatus(){
+      isAdmin = false;
+      const sessionRes = await supabase.auth.getSession();
+      const session = sessionRes.data.session;
+      if(!session){ updateModeLabel(); return; }
+      const uid = session.user.id;
+      // Try profiles table first
+      try{
+        const { data, error } = await supabase.from('profiles').select('is_admin').eq('id', uid).limit(1).maybeSingle();
+        if(!error && data && data.is_admin){ isAdmin = true; updateModeLabel(); return; }
+      }catch(e){ /* ignore */ }
+      // Try admins table
+      try{
+        const { data, error } = await supabase.from('admins').select('uid').eq('uid', uid).limit(1).maybeSingle();
+        if(!error && data && (data.uid||data.uid===0)){ isAdmin = true; updateModeLabel(); return; }
+      }catch(e){ /* ignore */ }
+      // Not confirmed
+      updateModeLabel();
+    }
+
+    function updateModeLabel(){
+      document.getElementById('modeLabel').textContent = isAdmin ? 'Admin verified (writes disabled until you confirm DB policies)' : 'Read-only / not admin';
+      if(isAdmin){ document.querySelectorAll('.card').forEach(el=>el.classList.remove('disabled')); } else { document.querySelectorAll('.card').forEach(el=>el.classList.remove('disabled')); }
+    }
+
+    // Fetch counts
+    async function fetchCounts(){
+      try{
+        const p = await supabase.from('products').select('id', { count: 'exact' }).limit(1);
+        document.getElementById('cProducts').textContent = p.count ?? (Array.isArray(p.data)?p.data.length:'—');
+      }catch(e){ document.getElementById('cProducts').textContent='—'; }
+      try{ const c = await supabase.from('categories').select('id', { count: 'exact' }).limit(1); document.getElementById('cCategories').textContent = c.count ?? '—'; }catch(e){ document.getElementById('cCategories').textContent='—'; }
+      try{ const o = await supabase.from('orders').select('id', { count: 'exact' }).limit(1); document.getElementById('cOrders').textContent = o.count ?? '—'; }catch(e){ document.getElementById('cOrders').textContent='—'; }
+      // reviews may not exist
+      try{ const r = await supabase.from('reviews').select('id', { count: 'exact' }).limit(1); document.getElementById('cReviews').textContent = r.count ?? '—'; reviewsAvailable = true; document.getElementById('reviewsCard').style.display='block'; }catch(e){ document.getElementById('cReviews').textContent='—'; reviewsAvailable = false; document.getElementById('reviewsCard').style.display='none'; }
+    }
+
+    // Load lists (read-only)
+    async function loadProducts(){
+      try{
+        const { data, error } = await supabase.from('products').select('id,category_id,name,price,stock,is_available,image_url').order('id',{ascending:true}).limit(500);
+        if(error) throw error;
+        products = data || [];
+        renderProductList();
+      }catch(e){ console.error('loadProducts', e); document.getElementById('productList').innerHTML = '<div class="small">Tidak dapat memuat produk: '+(e.message||e)+'</div>'; }
+    }
+
+    function renderProductList(){
+      const q = document.getElementById('prodSearch').value.trim().toLowerCase();
+      const list = products.filter(p=>!q || (p.name && p.name.toLowerCase().includes(q)) || (p.category_id && String(p.category_id).includes(q)));
+      const container = document.getElementById('productList');
+      if(!list.length){ container.innerHTML='<div class="small">Tidak ada produk.</div>'; return; }
+      container.innerHTML = list.map(p=>`<div class="list-item"><div><strong>${escapeHtml(p.name)}</strong><div class="small">Rp${p.price} · stok:${p.stock} · cat:${escapeHtml(String(p.category_id||''))}</div></div><div><button disabled class="disabled small">Edit</button> <button disabled class="disabled small">Hapus</button></div></div>`).join('');
+    }
+
+    async function loadCategories(){
+      try{ const { data, error } = await supabase.from('categories').select('id,name').order('name',{ascending:true}).limit(500); if(error) throw error; categories = data||[]; const el = document.getElementById('categoryList'); el.innerHTML = categories.map(c=>`<div class="list-item"><div>${escapeHtml(c.name)}</div><div><button disabled class="disabled small">Edit</button></div></div>`).join(''); }catch(e){ console.error('loadCategories',e); document.getElementById('categoryList').innerHTML='<div class="small">Tidak dapat memuat kategori</div>'; }
+    }
+
+    async function loadOrders(){
+      try{
+        const { data, error } = await supabase.from('orders').select('id,order_number,customer_id,status,total_amount,created_at').order('created_at',{ascending:false}).limit(200);
+        if(error) throw error;
+        orders = data||[];
+        const el = document.getElementById('orderList');
+        if(!orders.length){ el.innerHTML='<div class="small">Tidak ada pesanan.</div>'; return; }
+        el.innerHTML = orders.map(o=>`<div class="list-item"><div><strong>${escapeHtml(o.order_number||'#'+o.id)}</strong><div class="small">${escapeHtml(o.status||'')} · Rp${o.total_amount} · ${new Date(o.created_at||'').toLocaleString()}</div></div><div><button disabled class="disabled small">Ubah status</button></div></div>`).join('');
+      }catch(e){ console.error('loadOrders', e); document.getElementById('orderList').innerHTML='<div class="small">Tidak dapat memuat pesanan: '+(e.message||'')+'</div>'; }
+    }
+
+    async function loadReviews(){
+      if(!reviewsAvailable) return;
+      try{
+        const { data, error } = await supabase.from('reviews').select('id,product_id,rating,content,user_name,created_at').order('created_at',{ascending:false}).limit(200);
+        if(error) throw error;
+        const el = document.getElementById('reviewList');
+        el.innerHTML = (data||[]).map(r=>`<div class="list-item"><div><strong>${escapeHtml(r.user_name||'Anon')}</strong><div class="small">Produk: ${escapeHtml(String(r.product_id||''))} · Rating: ${r.rating||''} · ${new Date(r.created_at||'').toLocaleString()}</div><div>${escapeHtml(r.content||'')}</div></div><div><button disabled class="disabled small">Moderasi</button></div></div>`).join('');
+      }catch(e){ console.error('loadReviews', e); document.getElementById('reviewList').innerHTML='<div class="small">Tidak dapat memuat ulasan</div>'; }
+    }
+
+    async function refreshAll(){
+      document.getElementById('refreshBtn').disabled = true;
+      await fetchCounts();
+      await loadProducts();
+      await loadCategories();
+      await loadOrders();
+      await loadReviews();
+      document.getElementById('refreshBtn').disabled = false;
+    }
+
+    // Event wiring
+    document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+
+    // On load
+    (async ()=>{
+      renderAuth();
+      // Wait a bit for auth state
+      supabase.auth.onAuthStateChange((event, session)=>{ renderAuth(); checkAdminStatus().then(()=>{}); refreshAll(); });
+      await checkAdminStatus();
+      await refreshAll();
+    })();
+  </script>
+</body>
+</html>
