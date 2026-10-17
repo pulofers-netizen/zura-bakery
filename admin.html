@@ -154,11 +154,22 @@
         const { data, error } = await supabase.from('profiles').select('is_admin').eq('id', uid).limit(1).maybeSingle();
         if(!error && data && data.is_admin){ isAdmin = true; updateModeLabel(); return; }
       }catch(e){ /* ignore */ }
-      // Try admins table
-      try{
-        const { data, error } = await supabase.from('admins').select('uid').eq('uid', uid).limit(1).maybeSingle();
-        if(!error && data && (data.uid||data.uid===0)){ isAdmin = true; updateModeLabel(); return; }
-      }catch(e){ /* ignore */ }
+      // Verify admin using the correct column
+try {
+  const { data, error } = await supabase
+    .from('admins')
+    .select('user_id')
+    .eq('user_id', uid)
+    .maybeSingle();
+
+  if (!error && data && data.user_id === uid) {
+    isAdmin = true;
+    updateModeLabel();
+    return;
+  }
+} catch (e) {
+  console.error('Admin verification failed:', e);
+}
       // Not confirmed
       updateModeLabel();
     }
